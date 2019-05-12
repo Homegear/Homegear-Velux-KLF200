@@ -1,0 +1,335 @@
+<?xml version="1.0" encoding="utf-8"?>
+<homegearDevice xmlns="https://homegear.eu/xmlNamespaces/HomegearDevice" version="1">
+	<supportedDevices xmlns="https://homegear.eu/xmlNamespaces/DeviceType">
+		<device id="Roller Shutter">
+			<description>Roller Shutter</description>
+			<typeNumber>0x0080</typeNumber>
+		</device>
+	</supportedDevices>
+	<properties>
+		<timeout>86400</timeout>
+	</properties>
+	<functions xmlns="https://homegear.eu/xmlNamespaces/DeviceType">
+		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="0" type="MAINTENANCE">
+			<properties>
+				<internal>true</internal>
+			</properties>
+			<configParameters>VeluxConfig</configParameters>
+			<variables>maint_ch_values</variables>
+		</function>
+		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="1" type="VeluxRollerShutterControl">
+			<variables>VeluxVariablesControl</variables>
+		</function>
+		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="2" type="VeluxRollerShutterInfo">
+			<variables>VeluxVariablesInfo</variables>
+		</function>
+	</functions>
+	<packets>
+		<packet id="ROLLER_SHUTTER_SET_POSITION">
+			<direction>toCentral</direction>
+			<type>0x300</type>
+			<binaryPayload>
+				<element>
+					<bitIndex>0</bitIndex>
+					<bitSize>16</bitSize>
+					<parameterId>SESSION_ID</parameterId>
+				</element>
+				<element>
+					<bitIndex>16</bitIndex><!-- CommandOriginator -->
+					<bitSize>8</bitSize>
+					<constValueInteger>1</constValueInteger><!-- USER -->
+				</element>
+				<element>
+					<bitIndex>24</bitIndex><!-- PriorityLevel -->
+					<bitSize>8</bitSize>
+					<constValueInteger>3</constValueInteger><!-- User level 2 -->
+				</element>
+				<element>
+					<bitIndex>32</bitIndex><!-- ParameterActive -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>40</bitIndex><!-- FPI1 -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>48</bitIndex><!-- FPI2 -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>56</bitIndex><!-- Byte 0 of FunctionalParameterValueArray -->
+					<bitSize>16</bitSize>
+					<parameterId>POSITION</parameterId>
+				</element>
+				<element>
+					<bitIndex>72</bitIndex><!-- Bytes 1 to 33 of FunctionalParameterValueArray -->
+					<bitSize>256</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>328</bitIndex><!-- IndexArrayCount -->
+					<bitSize>8</bitSize>
+					<constValueInteger>1</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>336</bitIndex><!-- Byte 0 of IndexArray (Node ID) -->
+					<bitSize>8</bitSize>
+					<parameterId>NODE_ID</parameterId>
+				</element>
+				<element>
+					<bitIndex>344</bitIndex><!-- Bytes 1 to 19 of IndexArray -->
+					<bitSize>152</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>496</bitIndex><!-- PriorityLevelLock -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>504</bitIndex><!-- PL_0_3 -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>512</bitIndex><!-- PL_4_7 -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>520</bitIndex><!-- LockTime -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+			</binaryPayload>
+		</packet>
+		<packet id="ROLLER_SHUTTER_STOP">
+			<direction>toCentral</direction>
+			<type>0x300</type>
+			<binaryPayload>
+				<element>
+					<bitIndex>0</bitIndex>
+					<bitSize>16</bitSize>
+					<parameterId>SESSION_ID</parameterId>
+				</element>
+				<element>
+					<bitIndex>16</bitIndex><!-- CommandOriginator -->
+					<bitSize>8</bitSize>
+					<constValueInteger>1</constValueInteger><!-- USER -->
+				</element>
+				<element>
+					<bitIndex>24</bitIndex><!-- PriorityLevel -->
+					<bitSize>8</bitSize>
+					<constValueInteger>3</constValueInteger><!-- User level 2 -->
+				</element>
+				<element>
+					<bitIndex>32</bitIndex><!-- ParameterActive -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>40</bitIndex><!-- FPI1 -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>48</bitIndex><!-- FPI2 -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>56</bitIndex><!-- Byte 0 of FunctionalParameterValueArray -->
+					<bitSize>16</bitSize>
+					<constValueInteger>0xD200</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>72</bitIndex><!-- Bytes 1 to 33 of FunctionalParameterValueArray -->
+					<bitSize>256</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>328</bitIndex><!-- IndexArrayCount -->
+					<bitSize>8</bitSize>
+					<constValueInteger>1</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>336</bitIndex><!-- Byte 0 of IndexArray (Node ID) -->
+					<bitSize>8</bitSize>
+					<parameterId>NODE_ID</parameterId>
+				</element>
+				<element>
+					<bitIndex>344</bitIndex><!-- Bytes 1 to 19 of IndexArray -->
+					<bitSize>152</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>496</bitIndex><!-- PriorityLevelLock -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>504</bitIndex><!-- PL_0_3 -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>512</bitIndex><!-- PL_4_7 -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+				<element>
+					<bitIndex>520</bitIndex><!-- LockTime -->
+					<bitSize>8</bitSize>
+					<constValueInteger>0</constValueInteger>
+				</element>
+			</binaryPayload>
+		</packet>
+		<packet id="ROLLER_SHUTTER_INFO">
+			<direction>toCentral</direction>
+			<type>0x211</type>
+			<channel>2</channel>
+			<binaryPayload>
+				<element>
+					<bitIndex>16</bitIndex>
+					<bitSize>16</bitSize>
+					<parameterId>CURRENT_POSITION</parameterId>
+				</element>
+				<element>
+					<bitIndex>32</bitIndex>
+					<bitSize>16</bitSize>
+					<parameterId>CURRENT_TARGET_POSITION</parameterId>
+				</element>
+			</binaryPayload>
+		</packet>
+	</packets>
+	<parameterGroups xmlns="https://homegear.eu/xmlNamespaces/DeviceType">
+		<variables id="maint_ch_values">
+			<parameter id="UNREACH">
+				<properties>
+					<readable>true</readable>
+					<writeable>false</writeable>
+					<service>true</service>
+				</properties>
+				<logicalBoolean />
+				<physicalBoolean>
+					<operationType>internal</operationType>
+				</physicalBoolean>
+			</parameter>
+			<parameter id="STICKY_UNREACH">
+				<properties>
+					<readable>true</readable>
+					<writeable>true</writeable>
+					<service>true</service>
+					<sticky>true</sticky>
+				</properties>
+				<logicalBoolean />
+				<physicalBoolean>
+					<operationType>internal</operationType>
+				</physicalBoolean>
+			</parameter>
+		</variables>
+		<variables id="VeluxVariablesControl">
+			<parameter id="POSITION">
+				<properties>
+					<readable>true</readable>
+					<writeable>true</writeable>
+					<!-- Physical type is not signed -->
+					<signed>false</signed>
+					<unit>%</unit>
+					<casts>
+						<integerIntegerScale>
+							<factor>512</factor>
+							<operation>multiplication</operation>
+						</integerIntegerScale>
+					</casts>
+				</properties>
+				<logicalInteger>
+					<minimumValue>0</minimumValue>
+					<maximumValue>100</maximumValue>
+				</logicalInteger>
+				<physicalInteger groupId="POSITION">
+					<operationType>command</operationType>
+				</physicalInteger>
+				<packets>
+					<packet id="ROLLER_SHUTTER_SET_POSITION">
+						<type>set</type>
+					</packet>
+				</packets>
+			</parameter>
+			<parameter id="STOP">
+				<properties>
+					<readable>false</readable>
+					<writeable>true</writeable>
+				</properties>
+				<logicalAction/>
+				<physicalNone groupId="STOP">
+					<operationType>command</operationType>
+				</physicalNone>
+				<packets>
+					<packet id="ROLLER_SHUTTER_STOP">
+						<type>set</type>
+					</packet>
+				</packets>
+			</parameter>
+		</variables>
+		<variables id="VeluxVariablesInfo">
+			<parameter id="CURRENT_POSITION">
+				<properties>
+					<readable>true</readable>
+					<writeable>false</writeable>
+					<!-- Physical type is not signed -->
+					<signed>false</signed>
+					<unit>%</unit>
+					<casts>
+						<integerIntegerScale>
+							<factor>512</factor>
+							<operation>multiplication</operation>
+						</integerIntegerScale>
+					</casts>
+				</properties>
+				<logicalInteger>
+					<minimumValue>0</minimumValue>
+					<maximumValue>100</maximumValue>
+				</logicalInteger>
+				<physicalInteger groupId="CURRENT_POSITION">
+					<operationType>command</operationType>
+				</physicalInteger>
+				<packets>
+					<packet id="ROLLER_SHUTTER_INFO">
+						<type>event</type>
+					</packet>
+				</packets>
+			</parameter>
+			<parameter id="CURRENT_TARGET_POSITION">
+				<properties>
+					<readable>true</readable>
+					<writeable>false</writeable>
+					<!-- Physical type is not signed -->
+					<signed>false</signed>
+					<unit>%</unit>
+					<casts>
+						<integerIntegerScale>
+							<factor>512</factor>
+							<operation>multiplication</operation>
+						</integerIntegerScale>
+					</casts>
+				</properties>
+				<logicalInteger>
+					<minimumValue>0</minimumValue>
+					<maximumValue>100</maximumValue>
+				</logicalInteger>
+				<physicalInteger groupId="CURRENT_TARGET_POSITION">
+					<operationType>command</operationType>
+				</physicalInteger>
+				<packets>
+					<packet id="ROLLER_SHUTTER_INFO">
+						<type>event</type>
+					</packet>
+				</packets>
+			</parameter>
+		</variables>
+	</parameterGroups>
+</homegearDevice>
