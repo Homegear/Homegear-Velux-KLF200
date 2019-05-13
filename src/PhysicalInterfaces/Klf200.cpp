@@ -666,7 +666,7 @@ std::pair<PVeluxPacket, std::list<PVeluxPacket>> Klf200::getMultipleResponses(Ve
                             if(remainingPackets == 0) break;
                         }
                     }
-                    else if(remainingPacketsByte < payload.size())
+                    else if(remainingPacketsByte < (signed)payload.size())
                     {
                         remainingPackets = payload.at(remainingPacketsByte);
                         if(remainingPackets == 0) break;

@@ -814,7 +814,7 @@ PVariable VeluxCentral::searchDevices(BaseLib::PRpcClientInfo clientInfo)
             {
                 auto payload = info->getPayload();
                 if(payload.size() < 2) continue;
-                
+
                 uint32_t deviceType = 0x80000000;
                 uint8_t firmwareVersion = 0x10;
                 std::string serialNumber = "*" + std::string();
