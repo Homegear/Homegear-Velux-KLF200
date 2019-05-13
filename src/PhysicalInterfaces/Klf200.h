@@ -45,6 +45,7 @@ public:
     void sendPacket(std::shared_ptr<BaseLib::Systems::Packet> packet) override;
     bool isOpen() override { return !_stopped; }
     std::list<PVeluxPacket> getNodeInfo();
+    std::list<PVeluxPacket> getSceneInfo();
     uint16_t getMessageCounter();
 protected:
     struct Request
@@ -81,6 +82,7 @@ protected:
     void processPacket(std::vector<uint8_t>& data);
     PVeluxPacket getResponse(VeluxCommand responseCommand, const PVeluxPacket& requestPacket, int32_t waitForSeconds = 15);
     std::pair<PVeluxPacket, std::list<PVeluxPacket>> getMultipleResponses(VeluxCommand responseCommand, VeluxCommand notificationCommand, VeluxCommand finishedCommand, const PVeluxPacket& requestPacket, int32_t waitForSeconds = 15);
+    std::pair<PVeluxPacket, std::list<PVeluxPacket>> getMultipleResponses(VeluxCommand responseCommand, VeluxCommand notificationCommand, int32_t remainingPacketsByte, const PVeluxPacket& requestPacket, int32_t waitForSeconds = 15);
 };
 
 }

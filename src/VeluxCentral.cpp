@@ -414,7 +414,7 @@ std::string VeluxCentral::handleCliCommand(std::string command)
 				const int32_t idWidth = 11;
 				const int32_t nameWidth = 25;
 				const int32_t addressWidth = 8;
-				const int32_t serialWidth = 16;
+				const int32_t serialWidth = 17;
 				const int32_t typeWidth1 = 4;
 				const int32_t typeWidth2 = 25;
 				const int32_t firmwareWidth = 8;
@@ -435,7 +435,7 @@ std::string VeluxCentral::handleCliCommand(std::string command)
 					<< std::setw(configPendingWidth) << "Config Pending" << bar
 					<< std::setw(unreachWidth) << "Unreach"
 					<< std::endl;
-				stringStream << "────────────┼───────────────────────────┼──────────┼──────────────────┼──────┼───────────────────────────┼──────────┼────────────────┼────────" << std::endl;
+				stringStream << "────────────┼───────────────────────────┼──────────┼───────────────────┼──────┼───────────────────────────┼──────────┼────────────────┼────────" << std::endl;
 				stringStream << std::setfill(' ')
 					<< std::setw(idWidth) << " " << bar
 					<< std::setw(nameWidth) << " " << bar
@@ -531,7 +531,7 @@ std::string VeluxCentral::handleCliCommand(std::string command)
 					stringStream << std::endl << std::dec;
 				}
 				_peersMutex.unlock();
-				stringStream << "────────────┴───────────────────────────┴──────────┴──────────────────┴──────┴───────────────────────────┴──────────┴────────────────┴────────" << std::endl;
+				stringStream << "────────────┴───────────────────────────┴──────────┴───────────────────┴──────┴───────────────────────────┴──────────┴────────────────┴────────" << std::endl;
 				if(firmwareUpdates) stringStream << std::endl << "*: Firmware update available." << std::endl;
 
 				return stringStream.str();
@@ -795,6 +795,8 @@ PVariable VeluxCentral::searchDevices(BaseLib::PRpcClientInfo clientInfo)
                 }
                 if(peer->getID() == 0) continue;
 
+                peer->setName(name);
+
                 {
                     std::lock_guard<std::mutex> peersGuard(_peersMutex);
                     _peersBySerial[serialNumber] = peer;
@@ -804,6 +806,41 @@ PVariable VeluxCentral::searchDevices(BaseLib::PRpcClientInfo clientInfo)
 
                 GD::out.printMessage("Added peer " + std::to_string(peer->getID()) + ".");
                 newPeers.emplace(std::move(peer));
+            }
+
+            auto sceneInfoList = interface.second->getSceneInfo();
+
+            for(auto& info : sceneInfoList)
+            {
+                auto payload = info->getPayload();
+                if(payload.size() < 2) continue;
+                
+                uint32_t deviceType = 0x80000000;
+                uint8_t firmwareVersion = 0x10;
+                std::string serialNumber = "*" + std::string();
+
+                auto peer = getPeer(serialNumber);
+                if(peer) continue;
+
+                /*peer = createPeer(nodeId, firmwareVersion, nodeTypeSubType, serialNumber, interface.second, true);
+                if(!peer)
+                {
+                    GD::out.printWarning("Warning: No matching XML file found for device with serialnumber " + serialNumber + ". Type ID: 0x" + BaseLib::HelperFunctions::getHexString(nodeTypeSubType) + ".");
+                    continue;
+                }
+                if(peer->getID() == 0) continue;
+
+                peer->setName(name);
+
+                {
+                    std::lock_guard<std::mutex> peersGuard(_peersMutex);
+                    _peersBySerial[serialNumber] = peer;
+                    _peersById[peer->getID()] = peer;
+                    _peersByInterface[interface.first][nodeId] = peer;
+                }
+
+                GD::out.printMessage("Added peer " + std::to_string(peer->getID()) + ".");
+                newPeers.emplace(std::move(peer));*/
             }
         }
 
