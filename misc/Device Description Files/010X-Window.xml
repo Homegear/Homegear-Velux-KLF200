@@ -18,18 +18,17 @@
 			<properties>
 				<internal>true</internal>
 			</properties>
-			<configParameters>VeluxConfig</configParameters>
 			<variables>maint_ch_values</variables>
 		</function>
-		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="1" type="VeluxRollerShutterControl">
+		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="1" type="VeluxWindowControl">
 			<variables>VeluxVariablesControl</variables>
 		</function>
-		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="2" type="VeluxRollerShutterInfo">
+		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="2" type="VeluxWindowInfo">
 			<variables>VeluxVariablesInfo</variables>
 		</function>
 	</functions>
 	<packets>
-		<packet id="ROLLER_SHUTTER_SET_POSITION">
+		<packet id="WINDOW_SET_POSITION">
 			<direction>toCentral</direction>
 			<type>0x300</type>
 			<binaryPayload>
@@ -110,7 +109,7 @@
 				</element>
 			</binaryPayload>
 		</packet>
-		<packet id="ROLLER_SHUTTER_STOP">
+		<packet id="WINDOW_STOP">
 			<direction>toCentral</direction>
 			<type>0x300</type>
 			<binaryPayload>
@@ -191,7 +190,7 @@
 				</element>
 			</binaryPayload>
 		</packet>
-		<packet id="ROLLER_SHUTTER_INFO">
+		<packet id="WINDOW_INFO">
 			<direction>toCentral</direction>
 			<type>0x211</type>
 			<channel>2</channel>
@@ -258,7 +257,7 @@
 					<operationType>command</operationType>
 				</physicalInteger>
 				<packets>
-					<packet id="ROLLER_SHUTTER_SET_POSITION">
+					<packet id="WINDOW_SET_POSITION">
 						<type>set</type>
 					</packet>
 				</packets>
@@ -273,7 +272,7 @@
 					<operationType>command</operationType>
 				</physicalNone>
 				<packets>
-					<packet id="ROLLER_SHUTTER_STOP">
+					<packet id="WINDOW_STOP">
 						<type>set</type>
 					</packet>
 				</packets>
@@ -302,7 +301,7 @@
 					<operationType>command</operationType>
 				</physicalInteger>
 				<packets>
-					<packet id="ROLLER_SHUTTER_INFO">
+					<packet id="WINDOW_INFO">
 						<type>event</type>
 					</packet>
 				</packets>
@@ -329,7 +328,7 @@
 					<operationType>command</operationType>
 				</physicalInteger>
 				<packets>
-					<packet id="ROLLER_SHUTTER_INFO">
+					<packet id="WINDOW_INFO">
 						<type>event</type>
 					</packet>
 				</packets>

@@ -14,7 +14,6 @@
 			<properties>
 				<internal>true</internal>
 			</properties>
-			<configParameters>VeluxConfig</configParameters>
 			<variables>maint_ch_values</variables>
 		</function>
 		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="1" type="VeluxRollerShutterControl">
