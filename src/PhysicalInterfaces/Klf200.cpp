@@ -71,7 +71,7 @@ void Klf200::sendPacket(std::shared_ptr<BaseLib::Systems::Packet> packet)
     {
         PVeluxPacket veluxPacket(std::dynamic_pointer_cast<VeluxPacket>(packet));
         if(!veluxPacket) return;
-        
+
         auto response = getResponse(veluxPacket->getResponseCommand(), veluxPacket);
         if(!response) _out.printError("Error sending packet " + BaseLib::HelperFunctions::getHexString(veluxPacket->getBinary()));
 
@@ -595,6 +595,106 @@ std::pair<PVeluxPacket, std::list<PVeluxPacket>> Klf200::getMultipleResponses(Ve
     return std::pair<PVeluxPacket, std::list<PVeluxPacket>>();
 }
 
+std::pair<PVeluxPacket, std::list<PVeluxPacket>> Klf200::getMultipleResponses(VeluxCommand responseCommand, VeluxCommand notificationCommand, int32_t remainingPacketsByte, const PVeluxPacket& requestPacket, int32_t waitForSeconds)
+{
+    try
+    {
+        std::pair<PVeluxPacket, std::list<PVeluxPacket>> returnValue;
+        if(_stopped) return returnValue;
+
+        std::lock_guard<std::mutex> sendPacketGuard(_sendPacketMutex);
+        std::lock_guard<std::mutex> getResponseGuard(_getResponseMutex);
+        std::shared_ptr<Request> request = std::make_shared<Request>();
+        std::shared_ptr<Request> finishedRequest = std::make_shared<Request>();
+        std::unique_lock<std::mutex> responsesGuard(_responsesMutex);
+        _responses[responseCommand] = request;
+        _responseCollections[notificationCommand] = std::list<PVeluxPacket>();
+        responsesGuard.unlock();
+        std::unique_lock<std::mutex> lock(request->mutex);
+
+        auto requestBinary = requestPacket->getBinary();
+        auto slipPacket = slipEncode(requestBinary);
+
+        {
+            try
+            {
+                GD::out.printInfo("Info: Sending packet " + BaseLib::HelperFunctions::getHexString(slipPacket));
+                _tcpSocket->proofwrite((char*) slipPacket.data(), slipPacket.size());
+            }
+            catch(const BaseLib::SocketOperationException& ex)
+            {
+                _out.printError("Error sending packet: " + std::string(ex.what()));
+                return returnValue;
+            }
+
+            int32_t i = 0;
+            while(!request->conditionVariable.wait_for(lock, std::chrono::milliseconds(1000), [&]
+            {
+                i++;
+                return request->mutexReady || _stopped || i == 15;
+            }));
+
+            if(i == 15 || !request->response)
+            {
+                _out.printError("Error: No response received to packet: " + BaseLib::HelperFunctions::getHexString(slipPacket));
+                return returnValue;
+            }
+
+            returnValue.first = request->response;
+
+            responsesGuard.lock();
+            _responses.erase(responseCommand);
+            responsesGuard.unlock();
+        }
+
+        {
+            int32_t i = 0;
+            int32_t remainingPackets = 1;
+            for(; i < waitForSeconds; i++)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                responsesGuard.lock();
+                std::list<PVeluxPacket>& collection = _responseCollections[notificationCommand];
+                if(!collection.empty())
+                {
+                    auto payload = collection.back()->getPayload();
+                    if(remainingPackets < 0)
+                    {
+                        if(payload.size() - remainingPackets >= 0)
+                        {
+                            remainingPackets = payload.at(payload.size() - remainingPackets);
+                            if(remainingPackets == 0) break;
+                        }
+                    }
+                    else if(remainingPacketsByte < (signed)payload.size())
+                    {
+                        remainingPackets = payload.at(remainingPacketsByte);
+                        if(remainingPackets == 0) break;
+                    }
+                }
+                responsesGuard.unlock();
+            }
+
+            if(remainingPackets != 0)
+            {
+                _out.printWarning("Warning: Not all response packets (" + std::to_string(remainingPackets) + " still missing) have been received before timeout for request: " + BaseLib::HelperFunctions::getHexString(slipPacket));
+            }
+
+            responsesGuard.lock();
+            returnValue.second = _responseCollections[notificationCommand];
+            _responseCollections.erase(notificationCommand);
+            responsesGuard.unlock();
+        }
+
+        return returnValue;
+    }
+    catch(const std::exception& ex)
+    {
+        _out.printEx(__FILE__, __LINE__, __PRETTY_FUNCTION__, ex.what());
+    }
+    return std::pair<PVeluxPacket, std::list<PVeluxPacket>>();
+}
+
 std::list<PVeluxPacket> Klf200::getNodeInfo()
 {
     try
@@ -618,6 +718,32 @@ std::list<PVeluxPacket> Klf200::getNodeInfo()
         }
 
         if(result.second.size() != nodeCount) _out.printWarning("Warning: Expected to receive information for " + std::to_string(nodeCount) + " nodes, but only received information for " + std::to_string(result.second.size()) + " nodes.");
+
+        return result.second;
+    }
+    catch(const std::exception& ex)
+    {
+        _out.printEx(__FILE__, __LINE__, __PRETTY_FUNCTION__, ex.what());
+    }
+    return std::list<PVeluxPacket>();
+}
+
+std::list<PVeluxPacket> Klf200::getSceneInfo()
+{
+    try
+    {
+        std::vector<uint8_t> payload;
+        auto veluxPacket = std::make_shared<VeluxPacket>(VeluxCommand::GW_GET_SCENE_LIST_REQ, payload);
+        auto result = getMultipleResponses(VeluxCommand::GW_GET_SCENE_LIST_CFM, VeluxCommand::GW_GET_SCENE_LIST_NTF, -1, veluxPacket);
+        if(!result.first || result.first->getPayload().size() < 2)
+        {
+            _out.printError("Error: Could get scenes from KLF200.");
+            _stopped = true;
+            return std::list<PVeluxPacket>();
+        }
+
+        payload = result.first->getPayload();
+        auto sceneCount = payload.at(0);
 
         return result.second;
     }

@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <homegearDevice xmlns="https://homegear.eu/xmlNamespaces/HomegearDevice" version="1">
 	<supportedDevices xmlns="https://homegear.eu/xmlNamespaces/DeviceType">
-		<device id="Roller Shutter">
-			<description>Roller Shutter</description>
-			<typeNumber>0x0080</typeNumber>
+		<device id="Window">
+			<description>Window</description>
+			<typeNumber>0x0100</typeNumber>
+		</device>
+		<device id="Window with rain sensor">
+			<description>Window with rain sensor</description>
+			<typeNumber>0x0101</typeNumber>
 		</device>
 	</supportedDevices>
 	<properties>
@@ -16,15 +20,15 @@
 			</properties>
 			<variables>maint_ch_values</variables>
 		</function>
-		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="1" type="VeluxRollerShutterControl">
+		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="1" type="VeluxWindowControl">
 			<variables>VeluxVariablesControl</variables>
 		</function>
-		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="2" type="VeluxRollerShutterInfo">
+		<function xmlns="https://homegear.eu/xmlNamespaces/FunctionGroupType" channel="2" type="VeluxWindowInfo">
 			<variables>VeluxVariablesInfo</variables>
 		</function>
 	</functions>
 	<packets>
-		<packet id="ROLLER_SHUTTER_SET_POSITION">
+		<packet id="WINDOW_SET_POSITION">
 			<direction>toCentral</direction>
 			<type>0x300</type>
 			<binaryPayload>
@@ -105,7 +109,7 @@
 				</element>
 			</binaryPayload>
 		</packet>
-		<packet id="ROLLER_SHUTTER_STOP">
+		<packet id="WINDOW_STOP">
 			<direction>toCentral</direction>
 			<type>0x300</type>
 			<binaryPayload>
@@ -186,7 +190,7 @@
 				</element>
 			</binaryPayload>
 		</packet>
-		<packet id="ROLLER_SHUTTER_INFO">
+		<packet id="WINDOW_INFO">
 			<direction>toCentral</direction>
 			<type>0x211</type>
 			<channel>2</channel>
@@ -253,7 +257,7 @@
 					<operationType>command</operationType>
 				</physicalInteger>
 				<packets>
-					<packet id="ROLLER_SHUTTER_SET_POSITION">
+					<packet id="WINDOW_SET_POSITION">
 						<type>set</type>
 					</packet>
 				</packets>
@@ -268,7 +272,7 @@
 					<operationType>command</operationType>
 				</physicalNone>
 				<packets>
-					<packet id="ROLLER_SHUTTER_STOP">
+					<packet id="WINDOW_STOP">
 						<type>set</type>
 					</packet>
 				</packets>
@@ -297,7 +301,7 @@
 					<operationType>command</operationType>
 				</physicalInteger>
 				<packets>
-					<packet id="ROLLER_SHUTTER_INFO">
+					<packet id="WINDOW_INFO">
 						<type>event</type>
 					</packet>
 				</packets>
@@ -324,7 +328,7 @@
 					<operationType>command</operationType>
 				</physicalInteger>
 				<packets>
-					<packet id="ROLLER_SHUTTER_INFO">
+					<packet id="WINDOW_INFO">
 						<type>event</type>
 					</packet>
 				</packets>
