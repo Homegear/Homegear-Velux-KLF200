@@ -617,7 +617,7 @@ std::string VeluxCentral::handleCliCommand(std::string command)
 				index++;
 			}
 
-			auto result = searchDevices(nullptr);
+			auto result = searchDevices(nullptr, "");
 			stringStream << "Search completed. Found " << result->integerValue64 << " new peers." << std::endl;
 			return stringStream.str();
 		}
@@ -760,7 +760,7 @@ PVariable VeluxCentral::getPairingState(BaseLib::PRpcClientInfo clientInfo)
     return Variable::createError(-32500, "Unknown application error.");
 }
 
-PVariable VeluxCentral::searchDevices(BaseLib::PRpcClientInfo clientInfo)
+PVariable VeluxCentral::searchDevices(BaseLib::PRpcClientInfo clientInfo, const std::string& interfaceId)
 {
 	try
 	{
@@ -768,6 +768,8 @@ PVariable VeluxCentral::searchDevices(BaseLib::PRpcClientInfo clientInfo)
         std::unordered_set<std::shared_ptr<VeluxPeer>> newPeers;
         for(auto& interface : GD::physicalInterfaces)
         {
+            if(!interfaceId.empty() && interface.first != interfaceId) continue;
+
             auto nodeInfoList = interface.second->getNodeInfo();
 
             for(auto& info : nodeInfoList)
