@@ -229,7 +229,7 @@ void VeluxPacket::setPosition(uint32_t position, uint32_t size, const std::vecto
         {
             sourceCopy.push_back(source.at(i));
         }
-        BaseLib::BitReaderWriter::setPosition(position, size, _payload, sourceCopy);
+        BaseLib::BitReaderWriter::setPositionLE(position, size, _payload, sourceCopy);
     }
     catch(const std::exception& ex)
     {
