@@ -223,8 +223,9 @@ bool VeluxPeer::getAllValuesHook2(PRpcClientInfo clientInfo, PParameter paramete
 			if(parameter->id == "PEER_ID")
 			{
 				std::vector<uint8_t> parameterData;
-				parameter->convertToPacket(PVariable(new Variable((int32_t)_peerID)), parameterData);
-				valuesCentral[channel][parameter->id].setBinaryData(parameterData);
+				auto& rpcConfigurationParameter = valuesCentral[channel][parameter->id];
+				parameter->convertToPacket(PVariable(new Variable((int32_t)_peerID)), rpcConfigurationParameter.mainRole(), parameterData);
+                rpcConfigurationParameter.setBinaryData(parameterData);
 			}
 		}
 	}
@@ -391,12 +392,12 @@ void VeluxPeer::packetReceived(std::shared_ptr<VeluxPacket> packet)
                             }
                             else if(parameter.rpcParameter->logical->type == ILogical::Type::Enum::tBoolean)
                             {
-                                serviceMessages->set(i->first, parameter.rpcParameter->convertFromPacket(i->second.value, true)->booleanValue);
+                                serviceMessages->set(i->first, parameter.rpcParameter->convertFromPacket(i->second.value, parameter.mainRole(), true)->booleanValue);
                             }
                         }
 
                         valueKeys[*j]->push_back(i->first);
-                        rpcValues[*j]->push_back(parameter.rpcParameter->convertFromPacket(i->second.value, true));
+                        rpcValues[*j]->push_back(parameter.rpcParameter->convertFromPacket(i->second.value, parameter.mainRole(), true));
                     }
                 }
             }
@@ -542,8 +543,9 @@ PVariable VeluxPeer::getParamset(BaseLib::PRpcClientInfo clientInfo, int32_t cha
 				if(!i->second->readable) continue;
 				if(valuesCentral.find(channel) == valuesCentral.end()) continue;
 				if(valuesCentral[channel].find(i->second->id) == valuesCentral[channel].end()) continue;
-				std::vector<uint8_t> parameterData = valuesCentral[channel][i->second->id].getBinaryData();
-				element = i->second->convertFromPacket(parameterData);
+				auto& parameter = valuesCentral[channel][i->second->id];
+				std::vector<uint8_t> parameterData = parameter.getBinaryData();
+				element = i->second->convertFromPacket(parameterData, parameter.mainRole(), false);
 			}
 
 			if(!element) continue;
@@ -583,7 +585,7 @@ PVariable VeluxPeer::setValue(BaseLib::PRpcClientInfo clientInfo, uint32_t chann
         if(rpcParameter->physical->operationType == IPhysical::OperationType::Enum::store)
         {
             std::vector<uint8_t> parameterData;
-            rpcParameter->convertToPacket(value, parameterData);
+            rpcParameter->convertToPacket(value, parameter.mainRole(), parameterData);
             parameter.setBinaryData(parameterData);
             if(parameter.databaseId > 0) saveParameter(parameter.databaseId, parameterData);
             else saveParameter(0, ParameterGroup::Type::Enum::variables, channel, valueKey, parameterData);
@@ -591,7 +593,7 @@ PVariable VeluxPeer::setValue(BaseLib::PRpcClientInfo clientInfo, uint32_t chann
             if(rpcParameter->readable)
             {
                 valueKeys->push_back(valueKey);
-                values->push_back(rpcParameter->convertFromPacket(parameterData, true));
+                values->push_back(rpcParameter->convertFromPacket(parameterData, parameter.mainRole(), true));
             }
 
             if(!valueKeys->empty())
@@ -620,7 +622,7 @@ PVariable VeluxPeer::setValue(BaseLib::PRpcClientInfo clientInfo, uint32_t chann
         }
 
         std::vector<uint8_t> parameterData;
-        rpcParameter->convertToPacket(value, parameterData);
+        rpcParameter->convertToPacket(value, parameter.mainRole(), parameterData);
         parameter.setBinaryData(parameterData);
         if(parameter.databaseId > 0) saveParameter(parameter.databaseId, parameterData);
         else saveParameter(0, ParameterGroup::Type::Enum::variables, channel, valueKey, parameterData);
@@ -629,7 +631,7 @@ PVariable VeluxPeer::setValue(BaseLib::PRpcClientInfo clientInfo, uint32_t chann
         if(rpcParameter->readable)
         {
             valueKeys->push_back(valueKey);
-            values->push_back(rpcParameter->convertFromPacket(parameterData, true));
+            values->push_back(rpcParameter->convertFromPacket(parameterData, parameter.mainRole(), true));
         }
 
         for(std::shared_ptr<Parameter::Packet> setRequest : setRequests)
@@ -700,7 +702,7 @@ PVariable VeluxPeer::setValue(BaseLib::PRpcClientInfo clientInfo, uint32_t chann
                     if(resetParameterIterator == channelIterator->second.end()) continue;
                     PVariable logicalDefaultValue = resetParameterIterator->second.rpcParameter->logical->getDefaultValue();
                     std::vector<uint8_t> defaultValue;
-                    resetParameterIterator->second.rpcParameter->convertToPacket(logicalDefaultValue, defaultValue);
+                    resetParameterIterator->second.rpcParameter->convertToPacket(logicalDefaultValue, Role(), defaultValue);
                     if(!resetParameterIterator->second.equals(defaultValue))
                     {
                         resetParameterIterator->second.setBinaryData(defaultValue);
