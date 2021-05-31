@@ -13,6 +13,11 @@ override_dh_auto_install:
 	chmod 755 $(CURDIR)/debian/homegear-velux-klf200/etc/homegear/devices/27
 	chmod 644 $(CURDIR)/debian/homegear-velux-klf200/etc/homegear/devices/27/*
 
+	mkdir -p $(CURDIR)/debian/homegear-velux-klf200/var/lib/homegear/admin-ui/translations/modules/velux-klf200
+	cp -R $(CURDIR)/misc/UI\ Translations/* $(CURDIR)/debian/homegear-velux-klf200/var/lib/homegear/admin-ui/translations/modules/velux-klf200
+	chown -R root:root $(CURDIR)/debian/homegear-velux-klf200/var/lib/homegear/admin-ui/translations/modules/velux-klf200
+	chmod -R 555 $(CURDIR)/debian/homegear-velux-klf200/var/lib/homegear/admin-ui/translations/modules/velux-klf200
+
 override_dh_strip:
 	dh_strip --dbg-package=homegear-velux-klf200
 
