@@ -134,6 +134,12 @@ PVariable Velux::getPairingInfo()
 		interface->structValue->emplace("host", field);
 
 		field = std::make_shared<BaseLib::Variable>(BaseLib::VariableType::tStruct);
+		field->structValue->emplace("pos", std::make_shared<BaseLib::Variable>(2));
+		field->structValue->emplace("label", std::make_shared<BaseLib::Variable>(std::string("l10n.veluxklf200.pairingInfo.password")));
+		field->structValue->emplace("type", std::make_shared<BaseLib::Variable>(std::string("string")));
+		interface->structValue->emplace("password", field);
+
+		field = std::make_shared<BaseLib::Variable>(BaseLib::VariableType::tStruct);
 		field->structValue->emplace("type", std::make_shared<BaseLib::Variable>(std::string("string")));
 		field->structValue->emplace("const", std::make_shared<BaseLib::Variable>(std::string("51200")));
 		interface->structValue->emplace("port", field);
