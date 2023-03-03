@@ -58,7 +58,7 @@ protected:
 
     BaseLib::Output _out;
     int32_t _port = 51200;
-    std::shared_ptr<BaseLib::TcpSocket> _tcpSocket;
+    std::shared_ptr<C1Net::TcpSocket> _tcpSocket;
 
     std::atomic<uint16_t> _messageCounter{ 0 };
 
