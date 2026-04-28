@@ -30,6 +30,8 @@
 #ifndef KLF200_H
 #define KLF200_H
 
+#include <cstdint>
+
 #include "../VeluxPacket.h"
 
 namespace Velux
