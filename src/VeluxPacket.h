@@ -30,6 +30,8 @@
 #ifndef VELUXPACKET_H_
 #define VELUXPACKET_H_
 
+#include <cstdint>
+
 #include <homegear-base/BaseLib.h>
 
 #include <map>
