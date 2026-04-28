@@ -30,6 +30,8 @@
 #ifndef VELUXPEER_H_
 #define VELUXPEER_H_
 
+#include <cstdint>
+
 #include "VeluxPacket.h"
 
 #include <homegear-base/BaseLib.h>
