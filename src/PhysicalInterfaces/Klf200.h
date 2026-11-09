@@ -33,6 +33,7 @@
 #include <cstdint>
 
 #include "../VeluxPacket.h"
+#include "KlfTlsClient.h"
 
 namespace Velux
 {
@@ -60,14 +61,16 @@ protected:
 
     BaseLib::Output _out;
     int32_t _port = 51200;
-    std::shared_ptr<C1Net::TcpSocket> _tcpSocket;
+    std::mutex _socketMutex;
+    std::shared_ptr<KlfTlsClient> _tcpSocket;
 
     std::atomic<uint16_t> _messageCounter{ 0 };
 
     std::thread _initThread;
-    std::thread _heartbeatThread;
 
-    int64_t _lastHeartBeat;
+    std::atomic_bool _initComplete{ false };
+    std::atomic<int32_t> _reconnectDelay{ 0 };
+    int64_t _lastHeartbeat = 0;
 
     std::mutex _sendPacketMutex;
     std::mutex _getResponseMutex;
@@ -78,13 +81,19 @@ protected:
 
     void listen();
     void init();
-    void heartbeat();
+    bool connect();
+    void closeSocket();
+    std::shared_ptr<KlfTlsClient> getSocket();
+    void checkHeartbeat();
 
     std::vector<uint8_t> slipEncode(const std::vector<uint8_t>& data);
+    bool sendSlipPacket(const std::vector<uint8_t>& slipPacket);
     void processPacket(std::vector<uint8_t>& data);
+    bool waitForResponse(const std::shared_ptr<Request>& request, int32_t waitForSeconds);
+    void removeResponseHandler(VeluxCommand command, const std::shared_ptr<Request>& request);
     PVeluxPacket getResponse(VeluxCommand responseCommand, const PVeluxPacket& requestPacket, int32_t waitForSeconds = 15);
     std::pair<PVeluxPacket, std::list<PVeluxPacket>> getMultipleResponses(VeluxCommand responseCommand, VeluxCommand notificationCommand, VeluxCommand finishedCommand, const PVeluxPacket& requestPacket, int32_t waitForSeconds = 15);
-    std::pair<PVeluxPacket, std::list<PVeluxPacket>> getMultipleResponses(VeluxCommand responseCommand, VeluxCommand notificationCommand, int32_t remainingPacketsByte, const PVeluxPacket& requestPacket, int32_t waitForSeconds = 15);
+    std::pair<PVeluxPacket, std::list<PVeluxPacket>> getMultipleResponses(VeluxCommand responseCommand, VeluxCommand notificationCommand, int32_t remainingPacketsByte, const PVeluxPacket& requestPacket, int32_t waitForSeconds = 15, int32_t totalObjectsByte = -1);
 };
 
 }

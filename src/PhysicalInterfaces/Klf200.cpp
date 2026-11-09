@@ -31,7 +31,52 @@
 #include "../Velux.h"
 #include "../GD.h"
 
+#include <algorithm>
+
 namespace Velux {
+
+namespace {
+//The KLF200 closes sockets after 15 minutes without communication (API chapter 4.1). GW_GET_STATE_REQ is used as keep-alive.
+constexpr int64_t kHeartbeatInterval = 30000;
+//Time without any received frame after a keep-alive request after which the connection is considered dead.
+constexpr int64_t kHeartbeatTimeout = 30000;
+//Read and write timeout. The listen thread checks the keep-alive at least this often.
+constexpr int32_t kSocketTimeout = 10000;
+constexpr int32_t kConnectTimeout = 10000;
+//The TLS handshake of the KLF200 takes more than 4 seconds even when it is idle (libc1-net aborts it after 5 seconds, see
+//KlfTlsClient).
+constexpr int32_t kHandshakeTimeout = 30000;
+//The KLF200 only accepts two sockets at the same time and frees sockets of dead connections only after 15 minutes. So don't
+//reconnect too aggressively.
+constexpr int32_t kMinReconnectDelay = 15;
+constexpr int32_t kMaxReconnectDelay = 120;
+//ProtocolID (1) + Length (1) + Command (2) + Data (max. 250) + Checksum (1)
+constexpr size_t kMaxFrameSize = 255;
+
+std::string getErrorString(const PVeluxPacket &errorPacket) {
+  auto payload = errorPacket->getPayload();
+  if (payload.empty()) return "unknown";
+  std::string description;
+  switch (payload.at(0)) {
+    case 0: description = "Not further defined error"; break;
+    case 1: description = "Unknown command or command is not accepted at this state"; break;
+    case 2: description = "Error on frame structure"; break;
+    case 7: description = "Busy. Try again later"; break;
+    case 8: description = "Bad system table index"; break;
+    case 12: description = "Not authenticated"; break;
+    default: description = "Unknown error";
+  }
+  return std::to_string(payload.at(0)) + " (" + description + ")";
+}
+
+//Returns the packet as hex string for logging. Passwords (GW_PASSWORD_ENTER_REQ, GW_PASSWORD_CHANGE_REQ) are not written to the log.
+std::string getLogString(const std::vector<uint8_t> &slipPacket) {
+  if (slipPacket.size() > 5 && slipPacket[3] == 0x30 && (slipPacket[4] == 0x00 || slipPacket[4] == 0x02)) {
+    return BaseLib::HelperFunctions::getHexString(slipPacket.data(), 5) + "...(password hidden)";
+  }
+  return BaseLib::HelperFunctions::getHexString(slipPacket);
+}
+}
 
 Klf200::Klf200(std::shared_ptr<BaseLib::Systems::PhysicalInterfaceSettings> settings) : IPhysicalInterface(GD::bl, GD::family->getFamily(), settings) {
   _out.init(GD::bl);
@@ -53,7 +98,6 @@ Klf200::Klf200(std::shared_ptr<BaseLib::Systems::PhysicalInterfaceSettings> sett
 Klf200::~Klf200() {
   stopListening();
   _bl->threadManager.join(_initThread);
-  _bl->threadManager.join(_heartbeatThread);
 }
 
 uint16_t Klf200::getMessageCounter() {
@@ -65,10 +109,14 @@ void Klf200::sendPacket(std::shared_ptr<BaseLib::Systems::Packet> packet) {
     PVeluxPacket veluxPacket(std::dynamic_pointer_cast<VeluxPacket>(packet));
     if (!veluxPacket) return;
 
+    if (!_initComplete) {
+      //Before the login is complete the KLF200 only answers with "not authenticated".
+      _out.printError("Error: Not connected to KLF200. Could not send packet " + BaseLib::HelperFunctions::getHexString(veluxPacket->getBinary()));
+      return;
+    }
+
     auto response = getResponse(veluxPacket->getResponseCommand(), veluxPacket);
     if (!response) _out.printError("Error sending packet " + BaseLib::HelperFunctions::getHexString(veluxPacket->getBinary()));
-
-    _lastPacketSent = BaseLib::HelperFunctions::getTime();
   }
   catch (const std::exception &ex) {
     _out.printEx(__FILE__, __LINE__, __PRETTY_FUNCTION__, ex.what());
@@ -89,21 +137,8 @@ void Klf200::startListening() {
       return;
     }
 
-    C1Net::TcpSocketInfo tcp_socket_info;
-    tcp_socket_info.read_timeout = 5000;
-    tcp_socket_info.write_timeout = 5000;
-
-    C1Net::TcpSocketHostInfo tcp_socket_host_info{
-        .host = _hostname,
-        .port = (uint16_t)_port,
-        .tls = true,
-        .verify_certificate = false,
-        .connection_retries = 1
-    };
-
-    _tcpSocket = std::make_unique<C1Net::TcpSocket>(tcp_socket_info, tcp_socket_host_info);
-
     _stopCallbackThread = false;
+    _reconnectDelay = 0;
     if (_settings->listenThreadPriority > -1) _bl->threadManager.start(_listenThread, true, _settings->listenThreadPriority, _settings->listenThreadPolicy, &Klf200::listen, this);
     else _bl->threadManager.start(_listenThread, true, &Klf200::listen, this);
     IPhysicalInterface::startListening();
@@ -116,14 +151,54 @@ void Klf200::startListening() {
 void Klf200::stopListening() {
   try {
     _stopCallbackThread = true;
-    if (_tcpSocket) _tcpSocket->Shutdown();
-    _bl->threadManager.join(_listenThread);
     _stopped = true;
+    {
+      auto socket = getSocket();
+      if (socket) socket->shutdown();
+    }
+    _bl->threadManager.join(_listenThread);
+    _bl->threadManager.join(_initThread);
+    closeSocket();
+    _initComplete = false;
     IPhysicalInterface::stopListening();
   }
   catch (const std::exception &ex) {
     _out.printEx(__FILE__, __LINE__, __PRETTY_FUNCTION__, ex.what());
   }
+}
+
+std::shared_ptr<KlfTlsClient> Klf200::getSocket() {
+  std::lock_guard<std::mutex> socketGuard(_socketMutex);
+  return _tcpSocket;
+}
+
+void Klf200::closeSocket() {
+  std::shared_ptr<KlfTlsClient> socket;
+  {
+    std::lock_guard<std::mutex> socketGuard(_socketMutex);
+    socket.swap(_tcpSocket);
+  }
+  //The socket object is destroyed as soon as no other thread uses it anymore. Every connection attempt uses a new socket object.
+  if (socket) socket->shutdown();
+}
+
+bool Klf200::connect() {
+  auto socket = std::make_shared<KlfTlsClient>(_hostname, (uint16_t)_port);
+  {
+    //Published before connecting, so stopListening() can abort a connection attempt. Nothing else uses the socket before
+    //_stopped is reset.
+    std::lock_guard<std::mutex> socketGuard(_socketMutex);
+    _tcpSocket = socket;
+  }
+  try {
+    socket->open(kConnectTimeout, kHandshakeTimeout);
+  }
+  catch (const std::exception &ex) {
+    //Make sure a partially established connection (e. g. failed TLS handshake) doesn't block a socket on the KLF200.
+    closeSocket();
+    throw;
+  }
+  return socket->connected();
 }
 
 void Klf200::init() {
@@ -142,7 +217,7 @@ void Klf200::init() {
       auto veluxPacket = std::make_shared<VeluxPacket>(VeluxCommand::GW_PASSWORD_ENTER_REQ, payload);
 
       auto responsePacket = getResponse(VeluxCommand::GW_PASSWORD_ENTER_CFM, veluxPacket);
-      if (!responsePacket || responsePacket->getPayload().at(0) == 1) {
+      if (!responsePacket || responsePacket->getPayload().empty() || responsePacket->getPayload().at(0) != 0) {
         _out.printError("Error: Could not login into KLF200. Please check your password.");
         _stopped = true;
         return;
@@ -221,7 +296,7 @@ void Klf200::init() {
       auto veluxPacket = std::make_shared<VeluxPacket>(VeluxCommand::GW_GET_STATE_REQ, payload);
       auto responsePacket = getResponse(VeluxCommand::GW_GET_STATE_CFM, veluxPacket);
       if (!responsePacket || responsePacket->getPayload().size() < 6) {
-        _out.printError("Error: Could get state of KLF200.");
+        _out.printError("Error: Could not get state of KLF200.");
         _stopped = true;
         return;
       }
@@ -233,7 +308,8 @@ void Klf200::init() {
       }
     }
 
-    _lastHeartBeat = BaseLib::HelperFunctions::getTime();
+    _reconnectDelay = kMinReconnectDelay;
+    _initComplete = true;
 
     _out.printInfo("Info: Initialization complete.");
   }
@@ -242,16 +318,27 @@ void Klf200::init() {
   }
 }
 
-void Klf200::heartbeat() {
+void Klf200::checkHeartbeat() {
   try {
-    std::vector<uint8_t> payload;
-    auto veluxPacket = std::make_shared<VeluxPacket>(VeluxCommand::GW_GET_STATE_REQ, payload);
-    auto responsePacket = getResponse(VeluxCommand::GW_GET_STATE_CFM, veluxPacket, 60);
-    if (!responsePacket) {
-      _out.printError("Error: Could get state of KLF200.");
-      _stopped = true;
+    if (_stopped || !_initComplete) return;
+
+    auto time = BaseLib::HelperFunctions::getTime();
+    if (_lastPacketReceived < _lastHeartbeat) {
+      //Nothing received since the last keep-alive request was sent.
+      if (time - _lastHeartbeat > kHeartbeatTimeout) {
+        _out.printError("Error: KLF200 did not respond to keep-alive request within " + std::to_string(kHeartbeatTimeout / 1000) + " seconds.");
+        _stopped = true;
+      }
       return;
     }
+
+    if (time - _lastHeartbeat < kHeartbeatInterval) return;
+    _lastHeartbeat = time;
+
+    //Only send the request without waiting for the response. This is called from the listen thread, which needs to read the response.
+    std::vector<uint8_t> payload;
+    auto veluxPacket = std::make_shared<VeluxPacket>(VeluxCommand::GW_GET_STATE_REQ, payload);
+    sendSlipPacket(slipEncode(veluxPacket->getBinary()));
   }
   catch (const std::exception &ex) {
     _out.printEx(__FILE__, __LINE__, __PRETTY_FUNCTION__, ex.what());
@@ -260,81 +347,98 @@ void Klf200::heartbeat() {
 
 void Klf200::listen() {
   try {
-    try {
-      _tcpSocket->Open();
-      if (_tcpSocket->Connected()) {
-        _out.printInfo("Info: Successfully connected.");
-        _stopped = false;
-        _bl->threadManager.start(_initThread, true, &Klf200::init, this);
-      }
-      _lastHeartBeat = BaseLib::HelperFunctions::getTime();
-    }
-    catch (const std::exception &ex) {
-      _out.printEx(__FILE__, __LINE__, __PRETTY_FUNCTION__, ex.what());
-    }
-
     std::vector<uint8_t> buffer(1024);
     std::vector<uint8_t> buffer2;
     buffer2.reserve(1024);
-    bool more_data = false;
     bool escape = false;
     while (!_stopCallbackThread) {
       try {
-        if (_stopped || !_tcpSocket->Connected()) {
-          if (_stopCallbackThread) return;
-          if (_stopped) _out.printWarning("Warning: Connection to device closed. Trying to reconnect...");
-          _tcpSocket->Shutdown();
-          for (int32_t i = 0; i < 15; i++) {
-            if (_stopCallbackThread) continue;
+        auto socket = getSocket();
+        if (_stopped || !socket || !socket->connected()) {
+          int32_t reconnectDelay = _reconnectDelay;
+          if (socket) _out.printWarning("Warning: Connection to device closed. Trying to reconnect in " + std::to_string(reconnectDelay) + " seconds...");
+          //Pending requests return as soon as _stopped is set.
+          _stopped = true;
+          _initComplete = false;
+          socket.reset();
+          closeSocket();
+          buffer2.clear();
+          escape = false;
+
+          for (int32_t i = 0; i < reconnectDelay && !_stopCallbackThread; i++) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
           }
-          _tcpSocket->Open();
-          if (_tcpSocket->Connected()) {
-            _out.printInfo("Info: Successfully connected.");
-            _stopped = false;
-            _bl->threadManager.start(_initThread, true, &Klf200::init, this);
+          if (_stopCallbackThread) break;
+          _reconnectDelay = std::min(std::max(reconnectDelay * 2, kMinReconnectDelay), kMaxReconnectDelay);
+
+          //Make sure the initialization of the previous connection has finished before the new connection is used.
+          _bl->threadManager.join(_initThread);
+
+          try {
+            if (connect()) {
+              _out.printInfo("Info: Successfully connected.");
+              _lastHeartbeat = BaseLib::HelperFunctions::getTime();
+              _stopped = false;
+              _bl->threadManager.start(_initThread, true, &Klf200::init, this);
+            } else _out.printError("Error: Could not connect to KLF200.");
           }
-          _lastHeartBeat = BaseLib::HelperFunctions::getTime();
+          catch (const std::exception &ex) {
+            _out.printError("Error: Could not connect to KLF200: " + std::string(ex.what()));
+          }
           continue;
         }
 
-        int32_t bytesRead = 0;
+        size_t bytesRead = 0;
         try {
-          bytesRead = _tcpSocket->Read(buffer.data(), buffer.size(), more_data);
+          bytesRead = socket->read(buffer.data(), buffer.size(), kSocketTimeout);
         }
-        catch (C1Net::TimeoutException &ex) {
-          if (_stopCallbackThread) continue;
-          if (BaseLib::HelperFunctions::getTime() - _lastHeartBeat > 15000) {
-            _lastHeartBeat = BaseLib::HelperFunctions::getTime();
-            _bl->threadManager.start(_heartbeatThread, false, &Klf200::heartbeat, this);
-          }
+        catch (const KlfSocketTimeoutException &ex) {
+          checkHeartbeat();
           continue;
         }
-        if (bytesRead <= 0) continue;
-        if (bytesRead > 1024) bytesRead = 1024;
+        if (bytesRead > buffer.size()) bytesRead = buffer.size();
 
         if (GD::bl->debugLevel >= 5) _out.printDebug("Debug: TCP packet received: " + BaseLib::HelperFunctions::getHexString(buffer.data(), bytesRead));
 
-        for (int32_t i = 0; i < bytesRead; i++) {
-          if (buffer.at(i) == 0xC0) {
+        for (size_t i = 0; i < bytesRead; i++) {
+          uint8_t byte = buffer.at(i);
+          if (byte == 0xC0) {
             escape = false;
-            if (buffer2.empty()) continue;
-            else {
+            if (!buffer2.empty()) {
               processPacket(buffer2);
               buffer2.clear();
-              continue;
             }
-          } else if (buffer.at(i) == 0xDB) {
-            escape = true;
+            continue;
           } else if (escape) {
-            if (buffer.at(i) == 0xDC) buffer2.push_back(0xC0);
-            else if (buffer.at(i) == 0xDD) buffer2.push_back(0xDB);
-          } else buffer2.push_back(buffer.at(i));
+            escape = false;
+            if (byte == 0xDC) byte = 0xC0;
+            else if (byte == 0xDD) byte = 0xDB;
+            //Other bytes are a protocol violation. As recommended by RFC 1055 they are kept as they are.
+          } else if (byte == 0xDB) {
+            escape = true;
+            continue;
+          }
+
+          if (buffer2.size() >= kMaxFrameSize) {
+            _out.printWarning("Warning: Received frame is too long. Discarding data: " + BaseLib::HelperFunctions::getHexString(buffer2));
+            buffer2.clear();
+          }
+          buffer2.push_back(byte);
         }
+
+        checkHeartbeat();
+      }
+      catch (const KlfSocketClosedException &ex) {
+        _stopped = true;
+        if (!_stopCallbackThread) _out.printWarning("Warning: Connection closed by KLF200: " + std::string(ex.what()));
+      }
+      catch (const KlfSocketException &ex) {
+        _stopped = true;
+        if (!_stopCallbackThread) _out.printError("Error reading from KLF200: " + std::string(ex.what()));
       }
       catch (const std::exception &ex) {
         _stopped = true;
-        _out.printEx(__FILE__, __LINE__, __PRETTY_FUNCTION__, ex.what());
+        if (!_stopCallbackThread) _out.printEx(__FILE__, __LINE__, __PRETTY_FUNCTION__, ex.what());
       }
     }
   }
@@ -369,76 +473,122 @@ std::vector<uint8_t> Klf200::slipEncode(const std::vector<uint8_t> &data) {
   return std::vector<uint8_t>();
 }
 
+bool Klf200::sendSlipPacket(const std::vector<uint8_t> &slipPacket) {
+  auto socket = getSocket();
+  if (!socket) return false;
+
+  try {
+    std::lock_guard<std::mutex> sendPacketGuard(_sendPacketMutex);
+    _out.printInfo("Info: Sending packet " + getLogString(slipPacket));
+    socket->send(slipPacket.data(), slipPacket.size(), kSocketTimeout);
+    _lastPacketSent = BaseLib::HelperFunctions::getTime();
+    return true;
+  }
+  catch (const KlfSocketException &ex) {
+    _out.printError("Error sending packet: " + std::string(ex.what()));
+    //The connection is broken. listen() reconnects.
+    _stopped = true;
+  }
+  return false;
+}
+
 void Klf200::processPacket(std::vector<uint8_t> &data) {
   try {
     auto veluxPacket = std::make_shared<VeluxPacket>(data);
+    _lastPacketReceived = BaseLib::HelperFunctions::getTime();
 
     std::unique_lock<std::mutex> requestsGuard(_responsesMutex);
     auto responsesIterator = _responses.find(veluxPacket->getCommand());
-    auto responseCollectionsIterator = _responseCollections.find(veluxPacket->getCommand());
     if (responsesIterator != _responses.end()) {
       auto request = responsesIterator->second;
       requestsGuard.unlock();
-      request->response = veluxPacket;
       {
         std::lock_guard<std::mutex> lock(request->mutex);
+        request->response = veluxPacket;
         request->mutexReady = true;
       }
       request->conditionVariable.notify_one();
       return;
-    } else if (responseCollectionsIterator != _responseCollections.end()) {
+    }
+
+    auto responseCollectionsIterator = _responseCollections.find(veluxPacket->getCommand());
+    if (responseCollectionsIterator != _responseCollections.end()) {
       responseCollectionsIterator->second.push_back(veluxPacket);
-      requestsGuard.unlock();
       return;
-    } else requestsGuard.unlock();
+    }
+    requestsGuard.unlock();
+
+    if (veluxPacket->getCommand() == VeluxCommand::GW_ERROR_NTF) {
+      _out.printWarning("Warning: KLF200 reported error " + getErrorString(veluxPacket) + ".");
+      return;
+    }
+    if (veluxPacket->getCommand() == VeluxCommand::GW_GET_STATE_CFM) return; //Response to keep-alive request
 
     raisePacketReceived(veluxPacket);
+  }
+  catch (const InvalidVeluxPacketException &ex) {
+    _out.printWarning("Warning: Invalid packet received (" + std::string(ex.what()) + "): " + BaseLib::HelperFunctions::getHexString(data));
   }
   catch (const std::exception &ex) {
     _out.printEx(__FILE__, __LINE__, __PRETTY_FUNCTION__, ex.what());
   }
 }
 
+bool Klf200::waitForResponse(const std::shared_ptr<Request> &request, int32_t waitForSeconds) {
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(waitForSeconds);
+  std::unique_lock<std::mutex> lock(request->mutex);
+  while (!request->mutexReady && !_stopped) {
+    auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) break;
+    //Wake up at least once per second to react to _stopped.
+    request->conditionVariable.wait_until(lock, std::min(deadline, now + std::chrono::seconds(1)));
+  }
+  return request->mutexReady;
+}
+
+void Klf200::removeResponseHandler(VeluxCommand command, const std::shared_ptr<Request> &request) {
+  std::lock_guard<std::mutex> responsesGuard(_responsesMutex);
+  auto responsesIterator = _responses.find(command);
+  if (responsesIterator != _responses.end() && responsesIterator->second == request) _responses.erase(responsesIterator);
+}
+
 PVeluxPacket Klf200::getResponse(VeluxCommand responseCommand, const PVeluxPacket &requestPacket, int32_t waitForSeconds) {
   try {
     if (_stopped) return PVeluxPacket();
 
-    std::lock_guard<std::mutex> sendPacketGuard(_sendPacketMutex);
     std::lock_guard<std::mutex> getResponseGuard(_getResponseMutex);
     std::shared_ptr<Request> request = std::make_shared<Request>();
-    std::unique_lock<std::mutex> requestsGuard(_responsesMutex);
-    _responses[responseCommand] = request;
-    requestsGuard.unlock();
-    std::unique_lock<std::mutex> lock(request->mutex);
-
-    auto requestBinary = requestPacket->getBinary();
-    auto slipPacket = slipEncode(requestBinary);
-
-    try {
-      GD::out.printInfo("Info: Sending packet " + BaseLib::HelperFunctions::getHexString(slipPacket));
-      _tcpSocket->Send(slipPacket);
+    {
+      std::lock_guard<std::mutex> responsesGuard(_responsesMutex);
+      _responses[responseCommand] = request;
+      //The KLF200 might answer with GW_ERROR_NTF instead of the confirmation (API chapter 4.6).
+      _responses[VeluxCommand::GW_ERROR_NTF] = request;
     }
-    catch (const C1Net::Exception &ex) {
-      _out.printError("Error sending packet: " + std::string(ex.what()));
+
+    auto slipPacket = slipEncode(requestPacket->getBinary());
+    bool sent = sendSlipPacket(slipPacket);
+    if (sent) waitForResponse(request, waitForSeconds);
+
+    removeResponseHandler(responseCommand, request);
+    removeResponseHandler(VeluxCommand::GW_ERROR_NTF, request);
+
+    if (!sent) return PVeluxPacket();
+
+    PVeluxPacket responsePacket;
+    {
+      std::lock_guard<std::mutex> lock(request->mutex);
+      responsePacket = request->response;
+    }
+
+    if (!responsePacket) {
+      if (!_stopped) _out.printError("Error: No response received to packet: " + getLogString(slipPacket));
       return PVeluxPacket();
     }
 
-    int32_t i = 0;
-    while (!request->conditionVariable.wait_for(lock, std::chrono::milliseconds(1000), [&] {
-      i++;
-      return request->mutexReady || _stopped || i == waitForSeconds;
-    }));
-
-    if (i == waitForSeconds || !request->response) {
-      _out.printError("Error: No response received to packet: " + BaseLib::HelperFunctions::getHexString(slipPacket));
+    if (responsePacket->getCommand() == VeluxCommand::GW_ERROR_NTF) {
+      _out.printError("Error: KLF200 answered packet " + getLogString(slipPacket) + " with error " + getErrorString(responsePacket) + ".");
       return PVeluxPacket();
     }
-
-    auto responsePacket = request->response;
-
-    requestsGuard.lock();
-    _responses.erase(responseCommand);
-    requestsGuard.unlock();
 
     return responsePacket;
   }
@@ -449,68 +599,50 @@ PVeluxPacket Klf200::getResponse(VeluxCommand responseCommand, const PVeluxPacke
 }
 
 std::pair<PVeluxPacket, std::list<PVeluxPacket>> Klf200::getMultipleResponses(VeluxCommand responseCommand, VeluxCommand notificationCommand, VeluxCommand finishedCommand, const PVeluxPacket &requestPacket, int32_t waitForSeconds) {
+  std::pair<PVeluxPacket, std::list<PVeluxPacket>> returnValue;
   try {
-    std::pair<PVeluxPacket, std::list<PVeluxPacket>> returnValue;
     if (_stopped) return returnValue;
 
-    std::lock_guard<std::mutex> sendPacketGuard(_sendPacketMutex);
     std::lock_guard<std::mutex> getResponseGuard(_getResponseMutex);
     std::shared_ptr<Request> request = std::make_shared<Request>();
     std::shared_ptr<Request> finishedRequest = std::make_shared<Request>();
-    std::unique_lock<std::mutex> responsesGuard(_responsesMutex);
-    _responses[responseCommand] = request;
-    _responses[finishedCommand] = finishedRequest;
-    _responseCollections[notificationCommand] = std::list<PVeluxPacket>();
-    responsesGuard.unlock();
-    std::unique_lock<std::mutex> lock(request->mutex);
-
-    auto requestBinary = requestPacket->getBinary();
-    auto slipPacket = slipEncode(requestBinary);
-
     {
-      try {
-        GD::out.printInfo("Info: Sending packet " + BaseLib::HelperFunctions::getHexString(slipPacket));
-        _tcpSocket->Send(slipPacket);
-      }
-      catch (const C1Net::Exception &ex) {
-        _out.printError("Error sending packet: " + std::string(ex.what()));
-        return returnValue;
-      }
-
-      int32_t i = 0;
-      while (!request->conditionVariable.wait_for(lock, std::chrono::milliseconds(1000), [&] {
-        i++;
-        return request->mutexReady || _stopped || i == 15;
-      }));
-
-      if (i == 15 || !request->response) {
-        _out.printError("Error: No response received to packet: " + BaseLib::HelperFunctions::getHexString(slipPacket));
-        return returnValue;
-      }
-
-      returnValue.first = request->response;
-
-      responsesGuard.lock();
-      _responses.erase(responseCommand);
-      responsesGuard.unlock();
+      std::lock_guard<std::mutex> responsesGuard(_responsesMutex);
+      _responses[responseCommand] = request;
+      _responses[VeluxCommand::GW_ERROR_NTF] = request;
+      _responses[finishedCommand] = finishedRequest;
+      _responseCollections[notificationCommand] = std::list<PVeluxPacket>();
     }
 
-    {
-      int32_t i = 0;
-      while (!finishedRequest->conditionVariable.wait_for(lock, std::chrono::milliseconds(1000), [&] {
-        i++;
-        return finishedRequest->mutexReady || _stopped || i == waitForSeconds;
-      }));
+    auto slipPacket = slipEncode(requestPacket->getBinary());
+    if (sendSlipPacket(slipPacket)) {
+      waitForResponse(request, 15);
 
-      if (i == waitForSeconds || !finishedRequest->response) {
-        _out.printWarning("Warning: No \"finished\" response received to packet: " + BaseLib::HelperFunctions::getHexString(slipPacket));
+      PVeluxPacket responsePacket;
+      {
+        std::lock_guard<std::mutex> lock(request->mutex);
+        responsePacket = request->response;
       }
 
-      responsesGuard.lock();
-      returnValue.second = _responseCollections[notificationCommand];
-      _responses.erase(finishedCommand);
+      if (!responsePacket) {
+        if (!_stopped) _out.printError("Error: No response received to packet: " + getLogString(slipPacket));
+      } else if (responsePacket->getCommand() == VeluxCommand::GW_ERROR_NTF) {
+        _out.printError("Error: KLF200 answered packet " + getLogString(slipPacket) + " with error " + getErrorString(responsePacket) + ".");
+      } else {
+        returnValue.first = responsePacket;
+        if (!waitForResponse(finishedRequest, waitForSeconds)) {
+          _out.printWarning("Warning: No \"finished\" response received to packet: " + getLogString(slipPacket));
+        }
+      }
+    }
+
+    removeResponseHandler(responseCommand, request);
+    removeResponseHandler(VeluxCommand::GW_ERROR_NTF, request);
+    removeResponseHandler(finishedCommand, finishedRequest);
+    {
+      std::lock_guard<std::mutex> responsesGuard(_responsesMutex);
+      if (returnValue.first) returnValue.second = std::move(_responseCollections[notificationCommand]);
       _responseCollections.erase(notificationCommand);
-      responsesGuard.unlock();
     }
 
     return returnValue;
@@ -521,82 +653,69 @@ std::pair<PVeluxPacket, std::list<PVeluxPacket>> Klf200::getMultipleResponses(Ve
   return std::pair<PVeluxPacket, std::list<PVeluxPacket>>();
 }
 
-std::pair<PVeluxPacket, std::list<PVeluxPacket>> Klf200::getMultipleResponses(VeluxCommand responseCommand, VeluxCommand notificationCommand, int32_t remainingPacketsByte, const PVeluxPacket &requestPacket, int32_t waitForSeconds) {
+std::pair<PVeluxPacket, std::list<PVeluxPacket>> Klf200::getMultipleResponses(VeluxCommand responseCommand, VeluxCommand notificationCommand, int32_t remainingPacketsByte, const PVeluxPacket &requestPacket, int32_t waitForSeconds, int32_t totalObjectsByte) {
+  std::pair<PVeluxPacket, std::list<PVeluxPacket>> returnValue;
   try {
-    std::pair<PVeluxPacket, std::list<PVeluxPacket>> returnValue;
     if (_stopped) return returnValue;
 
-    std::lock_guard<std::mutex> sendPacketGuard(_sendPacketMutex);
     std::lock_guard<std::mutex> getResponseGuard(_getResponseMutex);
     std::shared_ptr<Request> request = std::make_shared<Request>();
-    std::shared_ptr<Request> finishedRequest = std::make_shared<Request>();
-    std::unique_lock<std::mutex> responsesGuard(_responsesMutex);
-    _responses[responseCommand] = request;
-    _responseCollections[notificationCommand] = std::list<PVeluxPacket>();
-    responsesGuard.unlock();
-    std::unique_lock<std::mutex> lock(request->mutex);
-
-    auto requestBinary = requestPacket->getBinary();
-    auto slipPacket = slipEncode(requestBinary);
-
     {
-      try {
-        GD::out.printInfo("Info: Sending packet " + BaseLib::HelperFunctions::getHexString(slipPacket));
-        _tcpSocket->Send(slipPacket);
-      }
-      catch (const C1Net::Exception &ex) {
-        _out.printError("Error sending packet: " + std::string(ex.what()));
-        return returnValue;
-      }
-
-      int32_t i = 0;
-      while (!request->conditionVariable.wait_for(lock, std::chrono::milliseconds(1000), [&] {
-        i++;
-        return request->mutexReady || _stopped || i == 15;
-      }));
-
-      if (i == 15 || !request->response) {
-        _out.printError("Error: No response received to packet: " + BaseLib::HelperFunctions::getHexString(slipPacket));
-        return returnValue;
-      }
-
-      returnValue.first = request->response;
-
-      responsesGuard.lock();
-      _responses.erase(responseCommand);
-      responsesGuard.unlock();
+      std::lock_guard<std::mutex> responsesGuard(_responsesMutex);
+      _responses[responseCommand] = request;
+      _responses[VeluxCommand::GW_ERROR_NTF] = request;
+      _responseCollections[notificationCommand] = std::list<PVeluxPacket>();
     }
 
-    {
-      int32_t i = 0;
-      int32_t remainingPackets = 1;
-      for (; i < waitForSeconds; i++) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        responsesGuard.lock();
-        std::list<PVeluxPacket> &collection = _responseCollections[notificationCommand];
-        if (!collection.empty()) {
+    auto slipPacket = slipEncode(requestPacket->getBinary());
+    if (sendSlipPacket(slipPacket)) {
+      waitForResponse(request, 15);
+
+      PVeluxPacket responsePacket;
+      {
+        std::lock_guard<std::mutex> lock(request->mutex);
+        responsePacket = request->response;
+      }
+
+      if (!responsePacket) {
+        if (!_stopped) _out.printError("Error: No response received to packet: " + getLogString(slipPacket));
+      } else if (responsePacket->getCommand() == VeluxCommand::GW_ERROR_NTF) {
+        _out.printError("Error: KLF200 answered packet " + getLogString(slipPacket) + " with error " + getErrorString(responsePacket) + ".");
+      } else {
+        returnValue.first = responsePacket;
+
+        //When the confirmation reports zero objects, the KLF200 (firmware 0.2.0.0.71) doesn't send any notification.
+        auto responsePayload = responsePacket->getPayload();
+        bool noObjects = totalObjectsByte >= 0 && totalObjectsByte < (signed)responsePayload.size() && responsePayload.at(totalObjectsByte) == 0;
+
+        int32_t remainingPackets = noObjects ? 0 : -1;
+        auto deadline = noObjects ? std::chrono::steady_clock::now() : std::chrono::steady_clock::now() + std::chrono::seconds(waitForSeconds);
+        while (!_stopped && std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          std::lock_guard<std::mutex> responsesGuard(_responsesMutex);
+          std::list<PVeluxPacket> &collection = _responseCollections[notificationCommand];
+          if (collection.empty()) continue;
           auto payload = collection.back()->getPayload();
-          if (remainingPackets < 0) {
-            if (payload.size() - remainingPackets >= 0) {
-              remainingPackets = payload.at(payload.size() - remainingPackets);
-              if (remainingPackets == 0) break;
-            }
-          } else if (remainingPacketsByte < (signed)payload.size()) {
-            remainingPackets = payload.at(remainingPacketsByte);
+          //A negative index counts from the end of the payload.
+          int32_t index = remainingPacketsByte < 0 ? (int32_t)payload.size() + remainingPacketsByte : remainingPacketsByte;
+          if (index >= 0 && index < (signed)payload.size()) {
+            remainingPackets = payload.at(index);
             if (remainingPackets == 0) break;
           }
         }
-        responsesGuard.unlock();
-      }
 
-      if (remainingPackets != 0) {
-        _out.printWarning("Warning: Not all response packets (" + std::to_string(remainingPackets) + " still missing) have been received before timeout for request: " + BaseLib::HelperFunctions::getHexString(slipPacket));
+        if (remainingPackets != 0) {
+          _out.printWarning("Warning: Not all response packets have been received before timeout for request: " + getLogString(slipPacket));
+        }
       }
+    }
 
-      responsesGuard.lock();
-      returnValue.second = _responseCollections[notificationCommand];
+    removeResponseHandler(responseCommand, request);
+    removeResponseHandler(VeluxCommand::GW_ERROR_NTF, request);
+    {
+      std::lock_guard<std::mutex> responsesGuard(_responsesMutex);
+      if (returnValue.first) returnValue.second = std::move(_responseCollections[notificationCommand]);
       _responseCollections.erase(notificationCommand);
-      responsesGuard.unlock();
     }
 
     return returnValue;
@@ -613,8 +732,7 @@ std::list<PVeluxPacket> Klf200::getNodeInfo() {
     auto veluxPacket = std::make_shared<VeluxPacket>(VeluxCommand::GW_GET_ALL_NODES_INFORMATION_REQ, payload);
     auto result = getMultipleResponses(VeluxCommand::GW_GET_ALL_NODES_INFORMATION_CFM, VeluxCommand::GW_GET_ALL_NODES_INFORMATION_NTF, VeluxCommand::GW_GET_ALL_NODES_INFORMATION_FINISHED_NTF, veluxPacket);
     if (!result.first || result.first->getPayload().size() < 2) {
-      _out.printError("Error: Could get nodes from KLF200.");
-      _stopped = true;
+      _out.printError("Error: Could not get nodes from KLF200.");
       return std::list<PVeluxPacket>();
     }
 
@@ -639,15 +757,12 @@ std::list<PVeluxPacket> Klf200::getSceneInfo() {
   try {
     std::vector<uint8_t> payload;
     auto veluxPacket = std::make_shared<VeluxPacket>(VeluxCommand::GW_GET_SCENE_LIST_REQ, payload);
-    auto result = getMultipleResponses(VeluxCommand::GW_GET_SCENE_LIST_CFM, VeluxCommand::GW_GET_SCENE_LIST_NTF, -1, veluxPacket);
-    if (!result.first || result.first->getPayload().size() < 2) {
-      _out.printError("Error: Could get scenes from KLF200.");
-      _stopped = true;
+    auto result = getMultipleResponses(VeluxCommand::GW_GET_SCENE_LIST_CFM, VeluxCommand::GW_GET_SCENE_LIST_NTF, -1, veluxPacket, 15, 0);
+    //GW_GET_SCENE_LIST_CFM only contains TotalNumberOfObjects (API chapter 11.7.2).
+    if (!result.first || result.first->getPayload().empty()) {
+      _out.printError("Error: Could not get scenes from KLF200.");
       return std::list<PVeluxPacket>();
     }
-
-    payload = result.first->getPayload();
-    auto sceneCount = payload.at(0);
 
     return result.second;
   }

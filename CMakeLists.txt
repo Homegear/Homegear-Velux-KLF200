@@ -6,6 +6,8 @@ set(CMAKE_CXX_STANDARD 17)
 set(SOURCE_FILES
         src/PhysicalInterfaces/Klf200.cpp
         src/PhysicalInterfaces/Klf200.h
+        src/PhysicalInterfaces/KlfTlsClient.cpp
+        src/PhysicalInterfaces/KlfTlsClient.h
         src/Factory.cpp
         src/Factory.h
         src/GD.cpp
